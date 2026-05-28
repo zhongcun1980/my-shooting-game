@@ -41,7 +41,8 @@
     #gameOverText,
     #winText,
     #restartBtn,
-    #bombBtn {
+    #bombBtn,
+    #pauseBtn {
       z-index: 10;
     }
 
@@ -102,9 +103,39 @@
       text-shadow: 0 0 8px #ff4466;
       box-shadow: 0 0 12px rgba(255, 68, 102, 0.4);
       touch-action: manipulation;
+      pointer-events: auto;
     }
 
     #bombBtn:disabled {
+      opacity: 0.35;
+      cursor: default;
+      box-shadow: none;
+    }
+
+    #pauseBtn {
+      display: block;
+      position: absolute;
+      top: 12px;
+      right: calc(50% - 190px);
+      z-index: 10;
+      min-width: 36px;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: 1px;
+      color: #cceeff;
+      background: rgba(0, 120, 200, 0.2);
+      border: 1px solid #4488cc;
+      border-radius: 4px;
+      cursor: pointer;
+      text-shadow: 0 0 6px #4488cc;
+      box-shadow: 0 0 8px rgba(68, 136, 204, 0.35);
+      touch-action: manipulation;
+      pointer-events: auto;
+      line-height: 1;
+    }
+
+    #pauseBtn:disabled {
       opacity: 0.35;
       cursor: default;
       box-shadow: none;
@@ -114,6 +145,11 @@
       #bombBtn {
         right: 12px;
         bottom: 16px;
+      }
+
+      #pauseBtn {
+        right: 12px;
+        top: 10px;
       }
     }
 
@@ -183,6 +219,7 @@
     <div id="winText">YOU WIN!</div>
     <div id="gameOverText">GAME OVER</div>
     <button id="restartBtn">RESTART</button>
+    <button id="pauseBtn" title="Pause (P)">||</button>
     <button id="bombBtn">BOMB ×2</button>
     <canvas id="canvas"></canvas>
   </div>
@@ -195,6 +232,7 @@
     const levelLabelEl = document.getElementById("levelLabel");
     const powerUpEl = document.getElementById("powerUp");
     const restartBtn = document.getElementById("restartBtn");
+    const pauseBtn = document.getElementById("pauseBtn");
     const bombBtn = document.getElementById("bombBtn");
     const gameOverText = document.getElementById("gameOverText");
     const winText = document.getElementById("winText");
@@ -216,11 +254,71 @@
     canvas.width = W;
     canvas.height = H;
 
-    // --- Input ---
+    // --- Input (multi-touch) ---
     const keys = { ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false };
-    let touchX = null;
-    let touchY = null;
-    let isDragging = false;
+    const moveTouches = new Map();
+
+    function isOnBombButton(target) {
+      return bombBtn && (target === bombBtn || bombBtn.contains(target));
+    }
+
+    function applyMoveTouch(touch) {
+      const state = moveTouches.get(touch.identifier);
+      if (!state) return;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = W / rect.width;
+      const scaleY = H / rect.height;
+      player.x += (touch.clientX - state.lastX) * scaleX;
+      player.y += (touch.clientY - state.lastY) * scaleY;
+      state.lastX = touch.clientX;
+      state.lastY = touch.clientY;
+      clampPlayerPosition();
+    }
+
+    function onTouchStart(e) {
+      if (isPaused || gameOver || gameWon) return;
+      for (const touch of e.changedTouches) {
+        if (isOnBombButton(e.target)) continue;
+        if (e.target !== canvas && !canvas.contains(e.target)) continue;
+        moveTouches.set(touch.identifier, {
+          lastX: touch.clientX,
+          lastY: touch.clientY
+        });
+      }
+      if (moveTouches.size > 0) e.preventDefault();
+    }
+
+    function onTouchMove(e) {
+      if (isPaused || gameOver || gameWon) return;
+      let moved = false;
+      for (const touch of e.touches) {
+        if (moveTouches.has(touch.identifier)) {
+          applyMoveTouch(touch);
+          moved = true;
+        }
+      }
+      if (moved) e.preventDefault();
+    }
+
+    function onTouchEnd(e) {
+      for (const touch of e.changedTouches) {
+        moveTouches.delete(touch.identifier);
+      }
+    }
+
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    document.addEventListener("touchmove", onTouchMove, { passive: false });
+    document.addEventListener("touchend", onTouchEnd, { passive: false });
+    document.addEventListener("touchcancel", onTouchEnd, { passive: false });
+
+    if (bombBtn) {
+      bombBtn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (bombBtn.disabled) return;
+        activatePlayerBomb(performance.now());
+      }, { passive: false });
+    }
 
     window.addEventListener("keydown", (e) => {
       if (e.key in keys) {
@@ -231,30 +329,13 @@
         e.preventDefault();
         activatePlayerBomb(performance.now());
       }
+      if ((e.key === "p" || e.key === "P") && !e.repeat) {
+        e.preventDefault();
+        togglePause();
+      }
     });
     window.addEventListener("keyup", (e) => {
       if (e.key in keys) keys[e.key] = false;
-    });
-
-    canvas.addEventListener("touchstart", (e) => {
-      e.preventDefault();
-      isDragging = true;
-      touchX = e.touches[0].clientX;
-      touchY = e.touches[0].clientY;
-    }, { passive: false });
-
-    canvas.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-      if (isDragging) {
-        touchX = e.touches[0].clientX;
-        touchY = e.touches[0].clientY;
-      }
-    }, { passive: false });
-
-    canvas.addEventListener("touchend", () => {
-      isDragging = false;
-      touchX = null;
-      touchY = null;
     });
 
     // --- Stars (background) ---
@@ -410,7 +491,7 @@
     }
 
     function activatePlayerBomb(now) {
-      if (gameOver || gameWon || bombsRemaining <= 0) return;
+      if (gameOver || gameWon || isPaused || bombsRemaining <= 0) return;
 
       bombsRemaining--;
       updateBombsUI();
@@ -673,13 +754,25 @@
       const size = 22 + Math.random() * 14 + tier * 0.35;
       const moveType = pickEnemyMoveType(tier);
       const canShoot = tier >= 3 && Math.random() < Math.min(0.7, 0.12 + tier * 0.018);
+      const variant = Math.floor(Math.random() * 3);
+      const palette = [
+        { color: "#cc1122", accent: "#ff3355", core: "#ff0022" },
+        { color: "#991133", accent: "#ff4466", core: "#ff1133" },
+        { color: "#aa2200", accent: "#ff5522", core: "#ff3300" },
+        { color: "#770022", accent: "#cc2244", core: "#ee0022" },
+        { color: "#661111", accent: "#ff6644", core: "#ff2200" }
+      ][Math.floor(Math.random() * 5)];
       enemies.push({
         x: 30 + Math.random() * (W - 60),
         y: -size,
         size,
         tier,
+        variant,
         speed: 1.4 + Math.random() * 1.6 + tier * 0.14,
-        color: ["#ff3366", "#ff6600", "#cc00ff"][Math.floor(Math.random() * 3)],
+        color: palette.color,
+        accent: palette.accent,
+        coreColor: palette.core,
+        hullColor: "#120608",
         rot: Math.random() * Math.PI * 2,
         rotSpeed: (Math.random() - 0.5) * (0.06 + tier * 0.003),
         moveType,
@@ -1334,6 +1427,8 @@
     let bombFlash = null;
     let gameOver = false;
     let gameWon = false;
+    let isPaused = false;
+    let pauseStartedAt = 0;
     let animId = null;
     let levelBanner = null;
 
@@ -1344,7 +1439,48 @@
     function updateBombsUI() {
       if (!bombBtn) return;
       bombBtn.textContent = `BOMB ×${bombsRemaining}`;
-      bombBtn.disabled = bombsRemaining <= 0 || gameOver || gameWon;
+      bombBtn.disabled = bombsRemaining <= 0 || gameOver || gameWon || isPaused;
+    }
+
+    function updatePauseUI() {
+      if (!pauseBtn) return;
+      pauseBtn.disabled = gameOver || gameWon;
+    }
+
+    function shiftGameTimeBy(dt) {
+      if (dt <= 0) return;
+      if (powerUpUntil > 0) powerUpUntil += dt;
+      invincibleUntil += dt;
+      lastFire += dt;
+      lastSpawn += dt;
+      lastItemSpawn += dt;
+      if (levelBanner) levelBanner.startTime += dt;
+      if (bombFlash) bombFlash.startTime += dt;
+      if (boss) {
+        boss.lastSpiral += dt;
+        boss.lastPattern += dt;
+      }
+      for (const e of enemies) {
+        if (e.lastShot) e.lastShot += dt;
+      }
+    }
+
+    function togglePause() {
+      if (gameOver || gameWon) return;
+      if (!isPaused) {
+        isPaused = true;
+        pauseStartedAt = performance.now();
+        keys.ArrowLeft = false;
+        keys.ArrowRight = false;
+        keys.ArrowUp = false;
+        keys.ArrowDown = false;
+        moveTouches.clear();
+      } else {
+        shiftGameTimeBy(performance.now() - pauseStartedAt);
+        isPaused = false;
+      }
+      updateBombsUI();
+      updatePauseUI();
     }
 
     function resetBombsForLife() {
@@ -1394,6 +1530,8 @@
       scoreEl.textContent = "0";
       gameOver = false;
       gameWon = false;
+      isPaused = false;
+      pauseStartedAt = 0;
       powerUpType = null;
       powerUpUntil = 0;
       invincibleUntil = 0;
@@ -1423,11 +1561,21 @@
       winText.style.display = "none";
       updateLevelUI();
       updateLivesUI();
+      updatePauseUI();
       showLevelBanner(1);
       loop(performance.now());
     }
 
     restartBtn.addEventListener("click", resetGame);
+    if (pauseBtn) {
+      pauseBtn.addEventListener("click", togglePause);
+      pauseBtn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (pauseBtn.disabled) return;
+        togglePause();
+      }, { passive: false });
+    }
     bombBtn.addEventListener("click", () => activatePlayerBomb(performance.now()));
 
     // --- Collision ---
@@ -1454,7 +1602,7 @@
     // --- Draw helpers ---
     function drawPlayer(now) {
       const { x, y, w, h, color, accent } = player;
-      const t = performance.now() * 0.008;
+      const t = now * 0.008;
       const flameLen = 10 + Math.sin(t * 4) * 4;
 
       ctx.save();
@@ -1618,36 +1766,321 @@
       ctx.restore();
     }
 
+    function drawEnemyAura(s, pulse, coreColor) {
+      ctx.save();
+      ctx.globalAlpha = 0.22 + pulse * 0.12;
+      ctx.shadowBlur = 42 + pulse * 18;
+      ctx.shadowColor = "#ff0011";
+      ctx.fillStyle = "rgba(40, 0, 0, 0.55)";
+      ctx.beginPath();
+      ctx.ellipse(0, s * 0.05, s * 1.35, s * 1.15, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.globalAlpha = 0.35 + pulse * 0.2;
+      ctx.shadowBlur = 28 + pulse * 12;
+      ctx.shadowColor = coreColor;
+      ctx.fillStyle = "rgba(80, 0, 10, 0.35)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.95, s * 0.82, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawEnemyCore(s, pulse, coreColor, canShoot) {
+      const coreR = s * (0.18 + pulse * 0.04);
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, coreR);
+      grad.addColorStop(0, "#ffffff");
+      grad.addColorStop(0.35, canShoot ? "#ffcc00" : coreColor);
+      grad.addColorStop(1, "#660011");
+
+      ctx.shadowBlur = 22 + pulse * 14;
+      ctx.shadowColor = canShoot ? "#ff8800" : coreColor;
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, coreR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = "#ffffff";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.beginPath();
+      ctx.arc(-coreR * 0.22, -coreR * 0.22, coreR * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawJaggedWing(side, s, color, hullColor) {
+      const sx = side;
+      ctx.beginPath();
+      ctx.moveTo(sx * s * 0.15, -s * 0.05);
+      ctx.lineTo(sx * s * 0.95, -s * 0.45);
+      ctx.lineTo(sx * s * 1.05, -s * 0.15);
+      ctx.lineTo(sx * s * 0.88, s * 0.05);
+      ctx.lineTo(sx * s * 1.02, s * 0.35);
+      ctx.lineTo(sx * s * 0.62, s * 0.22);
+      ctx.lineTo(sx * s * 0.48, s * 0.55);
+      ctx.lineTo(sx * s * 0.28, s * 0.18);
+      ctx.closePath();
+
+      const wingGrad = ctx.createLinearGradient(sx * s * 1.1, 0, sx * s * 0.1, 0);
+      wingGrad.addColorStop(0, color);
+      wingGrad.addColorStop(0.45, hullColor);
+      wingGrad.addColorStop(1, "#050002");
+      ctx.shadowBlur = 16;
+      ctx.shadowColor = color;
+      ctx.fillStyle = wingGrad;
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255, 40, 40, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    function drawEnemyMecha(e, s, pulse) {
+      drawJaggedWing(-1, s, e.color, e.hullColor);
+      drawJaggedWing(1, s, e.color, e.hullColor);
+
+      const hullGrad = ctx.createLinearGradient(0, -s, 0, s);
+      hullGrad.addColorStop(0, e.accent);
+      hullGrad.addColorStop(0.35, e.color);
+      hullGrad.addColorStop(0.7, e.hullColor);
+      hullGrad.addColorStop(1, "#080002");
+
+      ctx.shadowBlur = 20;
+      ctx.shadowColor = e.color;
+      ctx.fillStyle = hullGrad;
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.92);
+      ctx.lineTo(s * 0.42, -s * 0.35);
+      ctx.lineTo(s * 0.36, s * 0.55);
+      ctx.lineTo(0, s * 0.78);
+      ctx.lineTo(-s * 0.36, s * 0.55);
+      ctx.lineTo(-s * 0.42, -s * 0.35);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255, 60, 60, 0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.22, -s * 0.55);
+      ctx.lineTo(s * 0.22, -s * 0.55);
+      ctx.moveTo(-s * 0.18, s * 0.05);
+      ctx.lineTo(s * 0.18, s * 0.05);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(20, 0, 0, 0.9)";
+      ctx.fillRect(-s * 0.12, -s * 0.72, s * 0.24, s * 0.18);
+
+      for (const side of [-1, 1]) {
+        ctx.fillStyle = side === -1 ? "#220005" : "#330008";
+        ctx.fillRect(side * s * 0.08, s * 0.12, s * 0.14, s * 0.28);
+      }
+
+      if (e.canShoot) {
+        const barrelGlow = 14 + pulse * 8;
+        ctx.shadowBlur = barrelGlow;
+        ctx.shadowColor = "#ff4400";
+        ctx.fillStyle = "#331100";
+        ctx.fillRect(-s * 0.1, s * 0.42, s * 0.2, s * 0.38);
+        const barrelGrad = ctx.createLinearGradient(0, s * 0.42, 0, s * 0.95);
+        barrelGrad.addColorStop(0, "#ff6600");
+        barrelGrad.addColorStop(1, "#aa1100");
+        ctx.fillStyle = barrelGrad;
+        ctx.fillRect(-s * 0.06, s * 0.48, s * 0.12, s * 0.32);
+        ctx.fillStyle = `rgba(255, 180, 0, ${0.55 + pulse * 0.35})`;
+        ctx.beginPath();
+        ctx.arc(0, s * 0.88, s * 0.07 + pulse * 0.03, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawEnemyCore(s, pulse, e.coreColor, e.canShoot);
+    }
+
+    function drawEnemyAlien(e, s, pulse) {
+      ctx.save();
+      ctx.shadowBlur = 24;
+      ctx.shadowColor = e.coreColor;
+
+      const bodyGrad = ctx.createRadialGradient(0, -s * 0.1, s * 0.1, 0, 0, s);
+      bodyGrad.addColorStop(0, e.accent);
+      bodyGrad.addColorStop(0.4, e.color);
+      bodyGrad.addColorStop(0.75, e.hullColor);
+      bodyGrad.addColorStop(1, "#060001");
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.95);
+      ctx.bezierCurveTo(s * 0.72, -s * 0.55, s * 0.82, s * 0.15, s * 0.38, s * 0.72);
+      ctx.quadraticCurveTo(0, s * 0.95, -s * 0.38, s * 0.72);
+      ctx.bezierCurveTo(-s * 0.82, s * 0.15, -s * 0.72, -s * 0.55, 0, -s * 0.95);
+      ctx.fill();
+
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(side * s * 0.35, -s * 0.05);
+        ctx.lineTo(side * s * 1.05, -s * 0.55);
+        ctx.lineTo(side * s * 0.82, -s * 0.15);
+        ctx.lineTo(side * s * 0.95, s * 0.25);
+        ctx.lineTo(side * s * 0.55, s * 0.08);
+        ctx.closePath();
+        ctx.fillStyle = side === -1 ? "#2a0008" : "#3a0010";
+        ctx.shadowColor = e.color;
+        ctx.shadowBlur = 14;
+        ctx.fill();
+      }
+
+      for (let i = 0; i < 5; i++) {
+        const angle = -Math.PI / 2 + (i - 2) * 0.28;
+        const len = s * (0.55 + (i % 2) * 0.12);
+        ctx.strokeStyle = `rgba(255, 30, 50, ${0.35 + pulse * 0.25})`;
+        ctx.lineWidth = 1.5;
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = "#ff0022";
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(angle) * s * 0.12, Math.sin(angle) * s * 0.12 - s * 0.05);
+        ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len - s * 0.05);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = "#0a0003";
+      for (const ex of [-0.22, 0, 0.22]) {
+        ctx.beginPath();
+        ctx.ellipse(s * ex, -s * 0.38, s * 0.11, s * 0.16, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 12 + pulse * 6;
+        ctx.shadowColor = e.canShoot ? "#ffcc00" : "#ff2244";
+        ctx.fillStyle = e.canShoot ? "#ffaa00" : "#cc0022";
+        ctx.beginPath();
+        ctx.arc(s * ex, -s * 0.38, s * 0.05, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#0a0003";
+      }
+
+      if (e.canShoot) {
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.12, s * 0.35);
+        ctx.lineTo(0, s * 0.82);
+        ctx.lineTo(s * 0.12, s * 0.35);
+        ctx.closePath();
+        ctx.fillStyle = "#220008";
+        ctx.shadowBlur = 16;
+        ctx.shadowColor = "#ff3300";
+        ctx.fill();
+        ctx.fillStyle = `rgba(255, 80, 0, ${0.6 + pulse * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(0, s * 0.78, s * 0.06, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawEnemyCore(s, pulse, e.coreColor, e.canShoot);
+      ctx.restore();
+    }
+
+    function drawEnemyHybrid(e, s, pulse) {
+      const ringAngle = e.phase * 1.4;
+      ctx.save();
+      ctx.rotate(ringAngle);
+
+      ctx.strokeStyle = `rgba(255, 20, 40, ${0.45 + pulse * 0.3})`;
+      ctx.lineWidth = 1.5;
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = e.coreColor;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s * 0.78, s * 0.58, 0, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.setLineDash([s * 0.18, s * 0.12]);
+      ctx.beginPath();
+      ctx.arc(0, 0, s * 0.62, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(side * s * 0.2, -s * 0.65);
+        ctx.lineTo(side * s * 0.78, -s * 0.82);
+        ctx.lineTo(side * s * 0.68, -s * 0.45);
+        ctx.lineTo(side * s * 0.95, -s * 0.18);
+        ctx.lineTo(side * s * 0.52, -s * 0.08);
+        ctx.lineTo(side * s * 0.58, s * 0.18);
+        ctx.lineTo(side * s * 0.25, s * 0.05);
+        ctx.closePath();
+        const spikeGrad = ctx.createLinearGradient(side * s, -s, side * s * 0.2, s * 0.2);
+        spikeGrad.addColorStop(0, e.accent);
+        spikeGrad.addColorStop(0.5, e.color);
+        spikeGrad.addColorStop(1, e.hullColor);
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = e.color;
+        ctx.fillStyle = spikeGrad;
+        ctx.fill();
+      }
+
+      const bodyGrad = ctx.createLinearGradient(-s * 0.4, -s, s * 0.4, s);
+      bodyGrad.addColorStop(0, "#1a0005");
+      bodyGrad.addColorStop(0.35, e.color);
+      bodyGrad.addColorStop(0.65, e.hullColor);
+      bodyGrad.addColorStop(1, "#050001");
+      ctx.shadowBlur = 22;
+      ctx.shadowColor = e.color;
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.88);
+      ctx.lineTo(s * 0.38, -s * 0.2);
+      ctx.lineTo(s * 0.28, s * 0.62);
+      ctx.lineTo(0, s * 0.82);
+      ctx.lineTo(-s * 0.28, s * 0.62);
+      ctx.lineTo(-s * 0.38, -s * 0.2);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255, 50, 60, 0.5)";
+      ctx.lineWidth = 1;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(0, -s * 0.15);
+        ctx.lineTo(side * s * 0.32, s * 0.35);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = "rgba(10, 0, 0, 0.85)";
+      ctx.beginPath();
+      ctx.moveTo(0, -s * 0.55);
+      ctx.lineTo(s * 0.14, -s * 0.28);
+      ctx.lineTo(0, -s * 0.05);
+      ctx.lineTo(-s * 0.14, -s * 0.28);
+      ctx.closePath();
+      ctx.fill();
+
+      if (e.canShoot) {
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = "#ff5500";
+        ctx.fillStyle = "#2a0800";
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.08, s * 0.35);
+        ctx.lineTo(0, s * 0.92);
+        ctx.lineTo(s * 0.08, s * 0.35);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      drawEnemyCore(s, pulse, e.coreColor, e.canShoot);
+    }
+
     function drawEnemy(e) {
       ctx.save();
       ctx.translate(e.x, e.y);
       ctx.rotate(e.rot);
-      ctx.shadowBlur = 16;
-      ctx.shadowColor = e.color;
-      ctx.fillStyle = e.color;
+
       const s = e.size / 2;
+      const pulse = 0.5 + Math.sin(e.phase * 2.2) * 0.5;
+      const coreColor = e.coreColor || e.color;
+      const variant = e.variant != null ? e.variant : 0;
 
-      // Diamond shape
-      ctx.beginPath();
-      ctx.moveTo(0, -s);
-      ctx.lineTo(s, 0);
-      ctx.lineTo(0, s);
-      ctx.lineTo(-s, 0);
-      ctx.closePath();
-      ctx.fill();
+      drawEnemyAura(s, pulse, coreColor);
 
-      // Inner core
-      ctx.fillStyle = e.canShoot ? "#ffcc00" : "#ffffff";
-      ctx.shadowColor = e.canShoot ? "#ff9900" : "#ffffff";
-      ctx.shadowBlur = e.canShoot ? 12 : 8;
-      ctx.beginPath();
-      ctx.arc(0, 0, s * 0.25, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (e.canShoot) {
-        ctx.fillStyle = "#ff6600";
-        ctx.shadowColor = "#ff6600";
-        ctx.fillRect(-2, s * 0.15, 4, s * 0.35);
+      switch (variant) {
+        case 1: drawEnemyAlien(e, s, pulse); break;
+        case 2: drawEnemyHybrid(e, s, pulse); break;
+        default: drawEnemyMecha(e, s, pulse); break;
       }
 
       ctx.restore();
@@ -1784,15 +2217,6 @@
       if (keys.ArrowRight) player.x += player.speed;
       if (keys.ArrowUp) player.y -= player.speed;
       if (keys.ArrowDown) player.y += player.speed;
-
-      if (isDragging && touchX !== null && touchY !== null) {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = W / rect.width;
-        const scaleY = H / rect.height;
-        player.x = (touchX - rect.left) * scaleX;
-        player.y = (touchY - rect.top) * scaleY;
-      }
-
       clampPlayerPosition();
     }
 
@@ -2028,7 +2452,23 @@
         gameOverText.style.display = "block";
       }
       restartBtn.style.display = "block";
+      isPaused = false;
       updateBombsUI();
+      updatePauseUI();
+    }
+
+    function drawPauseOverlay() {
+      if (!isPaused) return;
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = "center";
+      ctx.font = "bold 40px Segoe UI, sans-serif";
+      ctx.fillStyle = "#ffffff";
+      ctx.shadowBlur = 24;
+      ctx.shadowColor = "#00e5ff";
+      ctx.fillText("- PAUSE -", W / 2, H / 2);
+      ctx.restore();
     }
 
     function drawBackground() {
@@ -2062,8 +2502,9 @@
 
     function loop(now) {
       const stopped = gameOver || gameWon;
+      const frameTime = isPaused ? pauseStartedAt : now;
 
-      if (!stopped) {
+      if (!stopped && !isPaused) {
         try {
           updateStars();
           updatePlayer();
@@ -2094,9 +2535,10 @@
         for (const e of enemies) drawEnemy(e);
         if (boss) drawBoss();
         for (const p of particles) drawParticle(p);
-        drawPlayer(now);
-        drawBombFlash(now);
-        drawLevelBanner(now);
+        drawPlayer(frameTime);
+        drawBombFlash(frameTime);
+        drawLevelBanner(frameTime);
+        drawPauseOverlay();
         drawGameOverlay();
       } catch (err) {
         console.error("Game draw error:", err);
@@ -2120,6 +2562,7 @@
     updateLevelUI();
     updateLivesUI();
     updateBombsUI();
+    updatePauseUI();
     showLevelBanner(1);
     loop(performance.now());
   </script>
